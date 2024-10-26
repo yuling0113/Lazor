@@ -65,8 +65,9 @@ class LazorGame:
                 f.write(f"{step}\n")
         print("Solution written to solution.txt")
 
+
 def read_bff_file(file_path):
-    """Parses the .bff file format to initialize the Lazor game."""
+
     grid = []
     lasers = []
     blocks = []
@@ -74,21 +75,32 @@ def read_bff_file(file_path):
     with open(file_path, 'r') as file:
         for line in file:
             if line.startswith('GRID START'):
+                line = file.readline() 
                 while not line.startswith('GRID STOP'):
-                    grid.append(file.readline().strip().split())
+                    grid.append(line.strip().split())
+                    line = file.readline() 
+                
             elif line.startswith('L'):
                 _, x, y, vx, vy = line.split()
                 lasers.append(Laser(int(x), int(y), int(vx), int(vy)))
+                
             elif line.startswith('A'):
                 blocks.append(Block('A'))
+                
             elif line.startswith('B'):
                 blocks.append(Block('B'))
+                
             elif line.startswith('C'):
                 blocks.append(Block('C'))
 
     return LazorGame(grid, lasers, blocks)
 
+
+import time
 if __name__ == "__main__":
-    lazor_game = read_bff_file('dark_1.bff')
+    start_time = time.time()
+    lazor_game = read_bff_file('/Users/zyl/Desktop/bff_files-2/dark_1.bff')
     lazor_game.solve()
     lazor_game.output_solution()
+    end_time = time.time()
+    print(f"Running time: {end_time - start_time}")
