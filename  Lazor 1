@@ -1,0 +1,94 @@
+'''Represents a block on the Lazor board.'''
+class Block: 
+    def __init__(self, block_type):
+        self.block_type = block_type  # 'A' for reflect, 'B' for opaque, 'C' for refract
+
+    def interact(self, laser_direction):
+        if self.block_type == 'A':  
+            return -laser_direction  # Reflect block reflects laser
+        elif self.block_type == 'B':  
+            return None  # # Opaque block stops the laser
+        elif self.block_type == 'C':  
+            return laser_direction, -laser_direction  # # Refract block splits the laser
+
+'''Represents a laser on the board.'''
+class Laser:
+    def __init__(self, x, y, vx, vy):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+
+    def move(self):
+        # New position after movement
+        self.x += self.vx
+        self.y += self.vy
+
+    def current_position(self):
+        return self.x, self.y
+
+'''Represents the Lazor game, including the board, lasers, and blocks.'''
+class LazorGame:
+    def __init__(self, grid, lasers, blocks):
+        self.grid = grid  
+        self.lasers = lasers  # List of Lasers
+        self.blocks = blocks  # List of Blocks
+        self.solution = []
+
+    def solve(self):
+        for laser in self.lasers:
+            while self.is_valid_position(laser.current_position()):
+                self.handle_laser(laser)
+                laser.move()
+
+    def handle_laser(self, laser):
+        x, y = laser.current_position()
+        if self.grid[x][y] in self.blocks:
+            block = self.grid[x][y]
+            new_directions = block.interact(laser)
+            if new_directions:
+                # Handle laser redirection based on block type
+                if isinstance(new_directions, tuple):
+                    # Refract block splits laser
+                    self.lasers.append(Laser(x, y, *new_directions[1]))
+                laser.vx, laser.vy = new_directions
+
+    def is_valid_position(self, position):
+        """Checks if a laser is within the board limits."""
+        x, y = position
+        return 0 <= x < len(self.grid) and 0 <= y < len(self.grid[0])
+
+    def output_solution(self):
+        """Output the solution to a file."""
+        with open("solution.txt", "w") as f:
+            for step in self.solution:
+                f.write(f"{step}\n")
+        print("Solution written to solution.txt")
+
+def read_bff_file(file_path):
+    """Parses the .bff file format to initialize the Lazor game."""
+    grid = []
+    lasers = []
+    blocks = []
+
+    with open(file_path, 'r') as file:
+        for line in file:
+            if line.startswith('GRID START'):
+                while not line.startswith('GRID STOP'):
+                    grid.append(file.readline().strip().split())
+            elif line.startswith('L'):
+                _, x, y, vx, vy = line.split()
+                lasers.append(Laser(int(x), int(y), int(vx), int(vy)))
+            elif line.startswith('A'):
+                blocks.append(Block('A'))
+            elif line.startswith('B'):
+                blocks.append(Block('B'))
+            elif line.startswith('C'):
+                blocks.append(Block('C'))
+
+    return LazorGame(grid, lasers, blocks)
+
+if __name__ == "__main__":
+    lazor_game = read_bff_file('dark_1.bff')
+    lazor_game.solve()
+    lazor_game.output_solution()
