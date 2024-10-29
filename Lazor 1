@@ -99,8 +99,16 @@ def read_bff_file(file_path):
 import time
 if __name__ == "__main__":
     start_time = time.time()
-    lazor_game = read_bff_file('/Users/zyl/Desktop/bff_files-2/dark_1.bff')
+    lazor_game = read_bff_file('bff_files\dark_1.bff')
     lazor_game.solve()
     lazor_game.output_solution()
+    end_time = time.time()
+    print(f"Running time: {end_time - start_time}")
+
+if __name__ == "__main__":
+    start_time = time.time()
+    lazor_game1 = read_bff_file('bff_files\mad_4.bff')
+    lazor_game1.solve()
+    lazor_game1.output_solution()
     end_time = time.time()
     print(f"Running time: {end_time - start_time}")
