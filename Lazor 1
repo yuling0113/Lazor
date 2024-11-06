@@ -1,114 +1,402 @@
-'''Represents a block on the Lazor board.'''
-class Block: 
-    def __init__(self, block_type):
-        self.block_type = block_type  # 'A' for reflect, 'B' for opaque, 'C' for refract
-
-    def interact(self, laser_direction):
-        if self.block_type == 'A':  
-            return -laser_direction  # Reflect block reflects laser
-        elif self.block_type == 'B':  
-            return None  # # Opaque block stops the laser
-        elif self.block_type == 'C':  
-            return laser_direction, -laser_direction  # # Refract block splits the laser
-
-'''Represents a laser on the board.'''
-class Laser:
-    def __init__(self, x, y, vx, vy):
-        self.x = x
-        self.y = y
-        self.vx = vx
-        self.vy = vy
-
-    def move(self):
-        # New position after movement
-        self.x += self.vx
-        self.y += self.vy
-
-    def current_position(self):
-        return self.x, self.y
-
-'''Represents the Lazor game, including the board, lasers, and blocks.'''
-class LazorGame:
-    def __init__(self, grid, lasers, blocks):
-        self.grid = grid  
-        self.lasers = lasers  # List of Lasers
-        self.blocks = blocks  # List of Blocks
-        self.solution = []
-
-    def solve(self):
-        for laser in self.lasers:
-            while self.is_valid_position(laser.current_position()):
-                self.handle_laser(laser)
-                laser.move()
-
-    def handle_laser(self, laser):
-        x, y = laser.current_position()
-        if self.grid[x][y] in self.blocks:
-            block = self.grid[x][y]
-            new_directions = block.interact(laser)
-            if new_directions:
-                # Handle laser redirection based on block type
-                if isinstance(new_directions, tuple):
-                    # Refract block splits laser
-                    self.lasers.append(Laser(x, y, *new_directions[1]))
-                laser.vx, laser.vy = new_directions
-
-    def is_valid_position(self, position):
-        """Checks if a laser is within the board limits."""
-        x, y = position
-        return 0 <= x < len(self.grid) and 0 <= y < len(self.grid[0])
-
-    def output_solution(self):
-        """Output the solution to a file."""
-        with open("solution.txt", "w") as f:
-            for step in self.solution:
-                f.write(f"{step}\n")
-        print("Solution written to solution.txt")
-
-
-def read_bff_file(file_path):
-
-    grid = []
-    lasers = []
-    blocks = []
-
-    with open(file_path, 'r') as file:
-        for line in file:
-            if line.startswith('GRID START'):
-                line = file.readline() 
-                while not line.startswith('GRID STOP'):
-                    grid.append(line.strip().split())
-                    line = file.readline() 
-                
-            elif line.startswith('L'):
-                _, x, y, vx, vy = line.split()
-                lasers.append(Laser(int(x), int(y), int(vx), int(vy)))
-                
-            elif line.startswith('A'):
-                blocks.append(Block('A'))
-                
-            elif line.startswith('B'):
-                blocks.append(Block('B'))
-                
-            elif line.startswith('C'):
-                blocks.append(Block('C'))
-
-    return LazorGame(grid, lasers, blocks)
-
-
+import os
 import time
-if __name__ == "__main__":
+
+# Define the Block class representing blocks of types "A", "B", and "C"
+class Block:
+    def __init__(self, block_type, position, fixed=False):
+        self.block_type = block_type  # Type of block ("A", "B", "C")
+        self.position = position      # Position of the block on the grid
+        self.fixed = fixed            # Indicates if the block is fixed (cannot be moved)
+
+    def interact_with_lasers(self, laser_position, laser_direction):
+        # Determine if the laser is moving horizontally or vertically
+        is_horizontal = (laser_position[0] % 2 == 0)  # Even x-coordinate implies horizontal movement
+        is_vertical = (laser_position[1] % 2 == 0)    # Even y-coordinate implies vertical movement
+
+        if self.block_type == 'A':  # Reflective block
+            if is_horizontal and not is_vertical:
+                return -laser_direction[0], laser_direction[1]  # Reflect horizontally
+            elif is_vertical and not is_horizontal:
+                return laser_direction[0], -laser_direction[1]  # Reflect vertically
+
+        elif self.block_type == 'C':  # Refractive block
+            if is_horizontal and not is_vertical:
+                return [
+                    (laser_direction[0], laser_direction[1]),    # Original direction
+                    (-laser_direction[0], laser_direction[1])    # Refracted direction (horizontal reflection)
+                ]
+            elif is_vertical and not is_horizontal:
+                return [
+                    (laser_direction[0], laser_direction[1]),    # Original direction
+                    (laser_direction[0], -laser_direction[1])    # Refracted direction (vertical reflection)
+                ]
+
+        return None  # Opaque block ("B") or no interaction
+
+# Define the Laser class representing the state of a laser beam
+class Laser:
+    def __init__(self, position, direction, active=True):
+        self.position = position      # Current position of the laser
+        self.direction = direction    # Current direction of the laser
+        self.active = active          # Indicates if the laser is active (inside the grid)
+
+    def move(self, grid):
+        # Update the laser's position based on its direction
+        self.position = (self.position[0] + self.direction[0],
+                         self.position[1] + self.direction[1])
+        
+        # Check if the new position is outside the grid and update active status
+        if not self.is_inside(grid):
+            self.active = False
+    
+    def is_inside(self, grid):
+        # Get grid dimensions
+        grid_width = len(grid.expanded_grid[0])  # Number of columns in the grid
+        grid_height = len(grid.expanded_grid)    # Number of rows in the grid
+        
+        # Check if the laser's position is within the grid bounds
+        return (0 <= self.position[0] < grid_width
+                and 0 <= self.position[1] < grid_height)
+
+# Define the Grid class representing the game grid
+class Grid:
+    def __init__(self, raw_grid, points):
+        self.expanded_grid = self.expand_grid(raw_grid, points)  # Expanded grid with additional cells
+        self.points = {tuple(target): False for target in points}  # Dictionary to track target points
+
+    def expand_grid(self, raw_grid, points):
+        # Calculate the dimensions of the expanded grid
+        expanded_height = len(raw_grid) * 2 + 1
+        expanded_width = len(raw_grid[0]) * 2 + 1
+
+        # Initialize the expanded grid with default value '0'
+        expanded_grid = [['0' for _ in range(expanded_width)]
+                         for _ in range(expanded_height)]
+
+        # Fill the expanded grid with appropriate characters
+        for i in range(expanded_width):
+            for j in range(expanded_height):
+                if i % 2 != 0 and j % 2 != 0:
+                    expanded_grid[j][i] = 'o'  # Block position (empty space)
+                elif i % 2 == 0 and j % 2 == 0:
+                    expanded_grid[j][i] = '+'  # Corner
+                elif i % 2 != 0 and j % 2 == 0:
+                    expanded_grid[j][i] = '-'  # Horizontal edge
+                elif i % 2 == 0 and j % 2 != 0:
+                    expanded_grid[j][i] = '|'  # Vertical edge
+                    
+        # Place fixed blocks in the expanded grid
+        for y, row in enumerate(raw_grid):
+            for x, value in enumerate(row):
+                center_y = 2 * y + 1  # Calculate expanded grid y-coordinate
+                center_x = 2 * x + 1  # Calculate expanded grid x-coordinate
+                self.block_in_expanded_grid(expanded_grid, center_x, center_y, value)
+
+        # Mark target points in the expanded grid
+        for target in points:
+            xt, yt = target
+            expanded_grid[yt][xt] = '●'  # Target point symbol
+
+        return expanded_grid
+
+    def block_in_expanded_grid(self, grid, center_x, center_y, block_type):
+        # Place blocks in the expanded grid based on their type
+        if block_type == 'o':
+            grid[center_y][center_x] = 'o'  # Empty space
+        elif block_type == 'x':
+            grid[center_y][center_x] = 'x'  # No block allowed at this position
+        elif block_type == 'A':
+            grid[center_y][center_x] = 'A'  # Fixed reflective block
+        elif block_type == 'B':
+            grid[center_y][center_x] = 'B'  # Fixed opaque block
+        elif block_type == 'C':
+            grid[center_y][center_x] = 'C'  # Fixed refractive block
+
+    # Actions for modifying blocks on the grid
+    def modify_block(self, action, position=None, block_type=None):
+        if position is not None:
+            x, y = position
+
+        if action == 'empty_positions':
+            # Return a list of all empty positions where blocks can be placed
+            empty_positions = []
+            for y, row in enumerate(self.expanded_grid):
+                for x, value in enumerate(row):
+                    if value == 'o':
+                        empty_positions.append((x, y))
+            return empty_positions
+
+        elif action == 'place':
+            # Place a block at the specified position if possible
+            if (0 <= x < len(self.expanded_grid[0]) and
+                    0 <= y < len(self.expanded_grid) and
+                    self.expanded_grid[y][x] == 'o'):
+                self.expanded_grid[y][x] = block_type
+                return True
+            return False
+
+        elif action == 'remove':
+            # Remove a block from the specified position if possible
+            if (0 <= x < len(self.expanded_grid[0]) and
+                    0 <= y < len(self.expanded_grid) and
+                    self.expanded_grid[y][x] != 'x'):
+                self.expanded_grid[y][x] = 'o'
+                return True
+            return False
+
+        else:
+            raise ValueError(f"Unknown or unsupported action: {action}")
+
+def read_bff_file(filename):
+    with open(filename, 'r') as file:
+        grid = []
+        blocks = {'A': 0, 'B': 0, 'C': 0}
+        lasers = []
+        points = []
+        current_section = None  # Keep track of the current section we're reading
+
+        for line in file:
+            line = line.strip()
+        
+            # Skip empty lines or comments
+            if not line or line.startswith('#'):
+                continue
+
+            # Check for 'GRID START' and 'GRID STOP'
+            if 'GRID START' in line:
+                current_section = 'grid'
+                continue
+            elif 'GRID STOP' in line:
+                current_section = None
+                continue
+
+            # If we are in the grid section, process grid lines
+            if current_section == 'grid':
+                # Read grid lines and extract valid grid characters
+                grid_line = [char for char in line if char in 'oxABC']
+                grid.append(grid_line)
+                continue  # Continue to next line
+
+            # Outside of grid section, process definitions
+            if line.startswith(('A ', 'B ', 'C ')):
+                # Read block counts
+                parts = line.split()
+                if len(parts) >= 2:
+                    block_type = parts[0]
+                    count = parts[1]
+                    blocks[block_type] = int(count)
+                else:
+                    print(f"Warning: Invalid block definition in line: {line}")
+            elif line.startswith('L '):
+                # Read laser information
+                parts = line.split()
+                if len(parts) >= 5:
+                    position = (int(parts[1]), int(parts[2]))
+                    direction = (int(parts[3]), int(parts[4]))
+                    lasers.append(Laser(position, direction))
+                else:
+                    print(f"Warning: Invalid laser definition in line: {line}")
+            elif line.startswith('P '):
+                # Read target point information
+                parts = line.split()
+                if len(parts) >= 3:
+                    position = (int(parts[1]), int(parts[2]))
+                    points.append(position)
+                else:
+                    print(f"Warning: Invalid point definition in line: {line}")
+            else:
+                # Line does not match any known definition, ignore or handle accordingly
+                pass
+
+    return grid, lasers, points, blocks
+
+
+def simulate(grid, lasers, blocks):
+    # Simulate the laser paths and determine which target points are hit
+
+    # Store the original state of each laser for resetting later
+    original_states = [(laser.position, laser.direction) for laser in lasers]
+
+    def reset_lasers():
+        """Reset lasers to their original states."""
+        for i, laser in enumerate(lasers):
+            orig_pos, orig_dir = original_states[i]
+            laser.position = orig_pos
+            laser.direction = orig_dir
+
+    def meet_block(laser, blocks_dict):
+        # Handle the interaction between a laser and blocks
+        x, y = laser.position
+        dx, dy = laser.direction
+        new_lasers = []
+
+        # Check both adjacent positions based on laser direction
+        adjacent_positions = [(x + dx, y), (x, y + dy)]
+
+        for position in adjacent_positions:
+            if position in blocks_dict:
+                block = blocks_dict[position]
+                interaction_result = block.interact_with_lasers(laser.position, laser.direction)
+
+                if interaction_result is None:
+                    # If the laser is blocked, it stops
+                    return []
+
+                if isinstance(interaction_result, list):
+                    # Refractive block generates multiple new lasers
+                    new_lasers.extend(Laser(laser.position, new_direction) for new_direction in interaction_result)
+                else:
+                    # Reflective block changes the direction of the laser
+                    new_lasers.append(Laser(laser.position, interaction_result))
+
+                # Interaction found, no need to check other positions
+                break
+
+        if not new_lasers:
+            # If no interaction occurred, the laser continues in the same direction
+            new_lasers.append(Laser(laser.position, laser.direction))
+
+        return new_lasers
+
+    # Create a dictionary of blocks for quick access
+    blocks_dict = {block.position: block for block in blocks}
+    active_lasers = lasers.copy()  # Initialize the list of active lasers
+    hit_points = set()  # Store positions where lasers hit target points
+
+    # Initial interaction check for each laser at starting position
+    new_lasers = []
+    for laser in active_lasers:
+        interaction_results = meet_block(laser, blocks_dict)
+        new_lasers.extend(interaction_results)
+
+    active_lasers = new_lasers
+
+    # Main loop to simulate laser movements
+    while active_lasers:
+        new_lasers = []
+        for laser in active_lasers:
+            if laser.active:
+                # Move the laser
+                laser.move(grid)
+
+                # Check if the laser is within grid bounds
+                if not laser.is_inside(grid):
+                    continue
+
+                # Check for block interaction after moving
+                interaction_results = meet_block(laser, blocks_dict)
+                new_lasers.extend(interaction_results)
+
+                # Check if the laser hits a target point
+                if (0 <= laser.position[1] < len(grid.expanded_grid) and
+                        0 <= laser.position[0] < len(grid.expanded_grid[0])):
+                    target_cell = grid.expanded_grid[laser.position[1]][laser.position[0]]
+                    if target_cell == '●':
+                        hit_points.add(laser.position)
+
+        active_lasers = new_lasers
+
+    # Reset lasers to their original states after simulation
+    reset_lasers()
+
+    return hit_points
+
+
+# Solve the game
+def solve(grid, blocks, lasers, points, index=0, empty_positions=None, placed_blocks=None, available_blocks=None):
+    if empty_positions is None:
+        # Initialize parameters
+        empty_positions = grid.modify_block('empty_positions')
+        placed_blocks = []
+        available_blocks = blocks.copy()
+
+    if index == len(empty_positions):
+        # All positions have been considered
+        if all(count == 0 for count in available_blocks.values()):
+            # All blocks have been placed
+            block_objects = [Block(block_type, position) for block_type, position in placed_blocks]
+            hit_points = simulate(grid, lasers, block_objects)
+
+            # Check if all target points are hit
+            if all(target in hit_points for target in points):
+                return placed_blocks  # Solution found
+        return None  # No solution at this branch
+
+    current_position = empty_positions[index]
+
+    for block_type in 'ABCo':
+        if block_type == 'o' or available_blocks.get(block_type, 0) > 0:
+            # Try placing a block of this type at the current position
+            if block_type != 'o':
+                success = grid.modify_block('place', current_position, block_type)
+                if not success:
+                    continue  # Cannot place the block here, try next block type
+                available_blocks[block_type] -= 1
+                placed_blocks.append((block_type, current_position))
+
+            # Recursively solve for the next position
+            result = solve(grid, blocks, lasers, points, index + 1, empty_positions, placed_blocks, available_blocks)
+            if result is not None:
+                return result  # Solution found
+
+            # Backtrack: Remove block and restore remaining blocks count
+            if block_type != 'o':
+                grid.modify_block('remove', current_position)
+                available_blocks[block_type] += 1
+                placed_blocks.pop()
+
+    return None  # No solution found at this branch
+
+
+# Output the solution in txt form
+def solve_puzzle(file_path):
     start_time = time.time()
-    lazor_game = read_bff_file('bff_files\dark_1.bff')
-    lazor_game.solve()
-    lazor_game.output_solution()
+
+    # Read the puzzle file
+    grid_data, lasers, points, blocks = read_bff_file(file_path)
+    grid = Grid(grid_data, points)
+
+    # Call the standalone solve function directly
+    solution = solve(grid, blocks, lasers, points)
+
+    solution_output = ""
+    if solution:
+        solution_output += f"Solution found for {file_path}:\n"
+        for row in grid.expanded_grid:
+            solution_output += ''.join(row) + "\n"
+    else:
+        solution_output += f"No solution found for {file_path}.\n"
+
+    print(solution_output)
+
+    # Save the solution to a file
+    base_file_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_file_name = f"{base_file_name}_solution.txt"
+
+    with open(output_file_name, 'w') as file:
+        file.write(solution_output)
+
     end_time = time.time()
-    print(f"Running time: {end_time - start_time}")
+    elapsed_time = end_time - start_time
+    print(f"Time taken to solve {file_path}: {elapsed_time:.2f} seconds\n")
+
+# Solve each puzzle file in sequence
+def solve_files_sequentially(bff_files):
+    for bff_file in bff_files:
+        solve_puzzle(bff_file)
 
 if __name__ == "__main__":
-    start_time = time.time()
-    lazor_game1 = read_bff_file('bff_files\mad_4.bff')
-    lazor_game1.solve()
-    lazor_game1.output_solution()
-    end_time = time.time()
-    print(f"Running time: {end_time - start_time}")
+    # Specify the paths to the .bff files
+    bff_files = [
+        "bff_files/mad_1.bff",
+        "bff_files/dark_1.bff",
+        "bff_files/mad_4.bff",
+        "bff_files/mad_7.bff",
+        "bff_files/numbered_6.bff",
+        "bff_files/tiny_5.bff",
+        "bff_files/yarn_5.bff",
+        "bff_files/showstopper_4.bff"
+        # Add any additional .bff files as needed
+    ]
+    solve_files_sequentially(bff_files)
+
